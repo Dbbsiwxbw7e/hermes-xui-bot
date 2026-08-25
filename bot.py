@@ -12,7 +12,7 @@ import logging
 import os
 import uuid
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     ContextTypes, MessageHandler, filters,
@@ -84,6 +84,21 @@ def require_token(func):
 
 def run_blocking(fn, *args):
     return asyncio.to_thread(fn, *args)
+
+
+
+def q_edit_or_reply(update, text, keyboard=None):
+    """Edit the callback message or reply — never crashes."""
+    from telegram.error import BadRequest
+    q = update.callback_query
+    if q and q.message:
+        try:
+            return q.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+        except Exception:
+            pass
+    target = update.message or (q.message if q else None)
+    if target:
+        return target.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 # ── commands ───────────────────────────────────────────────────
@@ -243,7 +258,7 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     api = get_api(ctx)
     deployed = ctx.user_data.get("deployed_panels", [])
     if not deployed:
-        await update.message.reply_text(ui.LINKS_EMPTY, parse_mode="HTML")
+        await q_edit_or_reply(update, ui.LINKS_EMPTY)
         return
 
     origin = update.message or (update.callback_query.message if update.callback_query else None)
@@ -283,7 +298,11 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @require_token
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     api = get_api(ctx)
-    status = await update.message.reply_text("📊 ...", parse_mode="HTML")
+    if not api:
+        await q_edit_or_reply(update, ui.NOT_CONNECTED)
+        return
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+    status = await origin.reply_text(ui.header("وضعیت پروژه‌ها 📊"), parse_mode="HTML")
 
     def _collect():
         rows = []
@@ -346,8 +365,16 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{ui.header('راهنمای سریع 💡')}\n\n{text}", parse_mode="HTML")
 
     if data == "go_deploy":
-        # run the real deploy flow right from the button
-        update.message = q.message  # cmd_deploy uses update.message.reply_text
+        uid = update.effective_user.id
+        refresh_active(ctx, uid)
+        if not active_token(ctx):
+            await q.edit_message_text(
+                ui.NOT_CONNECTED,
+                reply_markup=ui.InlineKeyboardMarkup([[
+                    ui.InlineKeyboardButton("👤 رفتن به اکانت‌ها", callback_data="sec_account")]]),
+                parse_mode="HTML")
+            return
+        update.message = q.message
         await cmd_deploy(update, ctx)
         return
     if data == "refresh_menu":
@@ -383,6 +410,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "go_link":
+        refresh_active(ctx, update.effective_user.id)
         update.message = q.message
         await cmd_link(update, ctx)
         return
@@ -390,6 +418,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await show_tcp_menu(q)
         return
     if data == "go_status":
+        refresh_active(ctx, update.effective_user.id)
         update.message = q.message
         await cmd_status(update, ctx)
         return
