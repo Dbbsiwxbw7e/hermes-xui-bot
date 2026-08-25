@@ -100,7 +100,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     api = get_api(ctx)
     total_steps = len(config.PANELS) + 2
-    status = await update.message.reply_text(
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+    status = await origin.reply_text(
         ui.deploy_step(0, total_steps, "🚀 شروع دپلوی..."), parse_mode="HTML")
 
     # 1) project
@@ -245,7 +246,8 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ui.LINKS_EMPTY, parse_mode="HTML")
         return
 
-    status = await update.message.reply_text(
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+    status = await origin.reply_text(
         ui.deploy_step(0, 3, "🔗 ساخت اینباند و لینک..."), parse_mode="HTML")
 
     links = []
@@ -321,7 +323,8 @@ async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton(p["name"], callback_data=f"del:{p['id']}")]
           for p in sorted(projects, key=lambda x: x.get("createdAt", ""), reverse=True)[:10]]
     kb.append([InlineKeyboardButton("❌ انصراف", callback_data="cancel")])
-    await update.message.reply_text(
+    target = update.message or (update.callback_query.message if update.callback_query else None)
+    await target.reply_text(
         "🗑 کدوم پروژه؟",
         reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
@@ -343,10 +346,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{ui.header('راهنمای سریع 💡')}\n\n{text}", parse_mode="HTML")
 
     if data == "go_deploy":
-        if not active_token(ctx):
-            await q.edit_message_text(ui.NOT_CONNECTED, parse_mode="HTML")
-        else:
-            await hint("برای شروع دپلوی دستور رو بزن:\n🚀 <code>/deploy</code>")
+        # run the real deploy flow right from the button
+        update.message = q.message  # cmd_deploy uses update.message.reply_text
+        await cmd_deploy(update, ctx)
         return
     if data == "sec_account":
         await show_accounts(q, ctx, update.effective_user.id)
@@ -370,13 +372,15 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "go_link":
-        await hint("برای ساخت لینک اتصال بزن:\n🔗 <code>/link</code>")
+        update.message = q.message
+        await cmd_link(update, ctx)
         return
     if data == "go_tcp":
         await show_tcp_menu(q)
         return
     if data == "go_status":
-        await hint("برای دیدن وضعیت بزن:\n📊 <code>/status</code>")
+        update.message = q.message
+        await cmd_status(update, ctx)
         return
     if data.startswith("del:"):
         api = get_api(ctx)
