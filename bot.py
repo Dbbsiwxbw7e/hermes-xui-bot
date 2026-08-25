@@ -412,6 +412,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         refresh_active(ctx, update.effective_user.id)
         await link_nodes_flow(update, ctx)
         return
+    if data == "dep_random_domains":
+        refresh_active(ctx, update.effective_user.id)
+        await random_domains_all(update, ctx)
+        return
     if data.startswith("inb"):
         await handle_inbound_callback(update, ctx, q, data)
         return
@@ -536,6 +540,85 @@ async def link_nodes_flow(update, ctx):
 async def show_proxy_section(update, ctx, q):
     await q.edit_message_text(ui.PROXY_WELCOME,
                               reply_markup=ui.proxy_menu(), parse_mode="HTML")
+
+
+
+async def random_domains_all(update, ctx):
+    """Create a fresh random public domain (target port 3000) for EVERY panel
+    of the newest project — one shot for all panels."""
+    api = get_api(ctx)
+    if not api:
+        await q_edit_or_reply(update, ui.NOT_CONNECTED)
+        return
+
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+
+    def _discover():
+        projects = sorted(api.list_projects(), key=lambda x: x.get("createdAt", ""), reverse=True)
+        # prefer a project that actually has 3x-ui panels; skip the bot's own project
+        for proj in projects:
+            if proj["name"] == config.PROJECT_NAME:
+                continue
+            return proj
+        return projects[0] if projects else None
+
+    try:
+        proj = await run_blocking(_discover)
+        if not proj:
+            await q_edit_or_reply(update, ui.header("پروژه‌ای نیست 📭"))
+            return
+        envs = await run_blocking(api.get_environments, proj["id"])
+        env_id = envs[0]["id"] if envs else ""
+        tcp = TCPProxyAPI(active_token(ctx))
+        services = await run_blocking(tcp.list_services, proj["id"])
+    except Exception as e:
+        await q_edit_or_reply(update, f"{ui.header('خطا ⛔️')}\n\n❌ {e}")
+        return
+
+    if not services:
+        await q_edit_or_reply(update, ui.header("سرویسی نیست 📭"))
+        return
+
+    ctx.user_data["tcp_project_id"] = proj["id"]
+    status = await origin.reply_text(
+        ui.header(f'🎲 دامنه رندوم برای {len(services)} پنل...'), parse_mode="HTML")
+
+    lines = []
+    ok = 0
+    sem = asyncio.Semaphore(4)
+
+    async def make_domain(svc):
+        nonlocal ok
+        async with sem:
+            try:
+                domain = await run_blocking(api.create_domain, svc["id"], env_id, 3000)
+                if domain:
+                    ok += 1
+                    lines.append(f"✅ <b>{svc['name']}</b> → <code>{domain}</code>")
+                else:
+                    lines.append(f"⚠️ <b>{svc['name']}</b> → دامنه برگشت نخورد")
+            except Exception as e:
+                lines.append(f"❌ <b>{svc['name']}</b> → {str(e)[:50]}")
+            await say(status,
+                      ui.header(f"🎲 دامنه رندوم ({ok}/{len(services)})...")
+                      + f"\n{ui.SEP}\n" + "\n".join(lines))
+
+    await asyncio.gather(*(make_domain(s) for s in services))
+
+    # keep deployed_panels in sync with fresh URLs
+    deployed = ctx.user_data.get("deployed_panels") or []
+    for p in deployed:
+        match = next((l for l in lines if l.startswith(f"✅ <b>{p['name']}</b>")), None)
+        if match:
+            import re as _re
+            m = _re.search(r"<code>([^<]+)</code>", match)
+            if m:
+                p["url"] = f"https://{m.group(1)}"
+
+    await say(status,
+              ui.header(f'دامنه‌های جدید ست شد ✅ ({ok}/{len(services)})')
+              + f"\n{ui.SEP}\n" + "\n".join(lines)
+              + "\n\n🔌 همه روی پورت 3000 (nginx) وصل‌اند.")
 
 
 # ════════════════════════════════════════════════════════════════

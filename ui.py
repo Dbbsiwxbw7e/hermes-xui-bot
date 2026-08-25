@@ -311,7 +311,8 @@ DOMAIN_SET_HINT = (
 def deploy_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 دپلوی جدید (همه پنل‌ها)", callback_data="go_deploy")],
-        [InlineKeyboardButton("🌐 ست کردن دامنه", callback_data="dep_domain_hint")],
+        [InlineKeyboardButton("🌐 ست کردن دامنه", callback_data="dep_domain_hint"),
+         InlineKeyboardButton("🎲 دامنه رندوم برای همه", callback_data="dep_random_domains")],
         [InlineKeyboardButton("🔗 اتصال نودها", callback_data="dep_nodes")],
         [InlineKeyboardButton("🗑 حذف پنل/پروژه", callback_data="go_delete")],
         [InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
@@ -322,6 +323,7 @@ DEPLOY_WELCOME = (
     f"{header('بخش دپلوی 🚀')}\n\n"
     "🚀 <b>دپلوی جدید</b> — ساخت همه پنل‌ها + اتصال خودکار نودها\n"
     "🌐 <b>ست کردن دامنه</b> — دامنه دلخواهت رو به پنل وصل کن\n"
+    "🎲 <b>دامنه رندوم</b> — برای همه پنل‌ها یهجا دامنه تازه بسازه\n"
     "🔗 <b>اتصال نودها</b> — وصل کردن دستی پنل‌ها به پنل اصلی\n"
     "🗑 <b>حذف</b> — پنل یا کل پروژه رو پاک کن\n"
     "📊 <b>وضعیت</b> — لیست زنده پروژه‌ها\n\n"
