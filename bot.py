@@ -218,9 +218,49 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ui.STATUS_ICONS.get(st, "⏳"), p["name"],
             p.get("url", "").replace("https://", "") + "/managepanel/" if p.get("url") else st))
     ctx.user_data["deployed_panels"] = provisioned
-
     await say(status, ui.deploy_report(lines, ok == len(provisioned), ok,
                                        len(provisioned)))
+
+    # 4) auto-link nodes to the main panel (best-effort, non-blocking failures)
+    if config.AUTO_LINK_NODES and ok >= 2:
+        await say(status,
+                  f"{ui.header('🔗 اتصال خودکار نودها...')}\n\n"
+                  "پنل‌های آماده به پنل اصلی وصل میشن...")
+        link_lines = []
+        main = next((p for p in provisioned if p["name"] == config.MAIN_PANEL), None)
+        others = [p for p in provisioned if p.get("ready") and p.get("url")
+                  and p["name"] != (main or {}).get("name")]
+
+        async def link_one(p):
+            def _work():
+                mp = PanelClient(main["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+                if not mp.login():
+                    raise XUIError("ورود به پنل اصلی ناموفق")
+                np = PanelClient(p["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+                if not np.login():
+                    raise XUIError(f"ورود به {p['name']} ناموفق")
+                nuuid = np.get_uuid()
+                ntoken = np.create_api_token()
+                res = mp.add_node(p["name"], p["url"], nuuid, ntoken)
+                if not res.get("success"):
+                    raise XUIError(res.get("msg", "ناموفق"))
+                return True
+            try:
+                await run_blocking(_work)
+                link_lines.append(f"✅ <b>{p['name']}</b> → متصل به {config.MAIN_PANEL}")
+            except Exception as e:
+                link_lines.append(f"⚠️ <b>{p['name']}</b> → {str(e)[:60]}")
+            await say(status,
+                      f"{ui.header('🔗 اتصال نودها...')}\n{ui.SEP}\n"
+                      + "\n".join(link_lines))
+
+        for p in others:
+            await link_one(p)
+
+        summary = "\n".join(link_lines) or "(پنل دیگه‌ای برای اتصال نبود)"
+        await say(status,
+                  f"{ui.header('نتیجه اتصال نودها 🔗')}\n{ui.SEP}\n{summary}\n\n"
+                  f"🏠 نود اصلی: <b>{config.MAIN_PANEL}</b>")
 
 
 @require_token

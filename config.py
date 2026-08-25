@@ -34,6 +34,9 @@ INBOUND_PORT = int(os.getenv("INBOUND_PORT", "8080"))
 INBOUND_PATH = os.getenv("INBOUND_PATH", "/cdn")
 PANEL_BASE_PATH = "/managepanel/"
 
+# ── Node linking after deploy ──────────────────────────────────
+AUTO_LINK_NODES = os.getenv("AUTO_LINK_NODES", "1") == "1"
+
 # ── Timing ─────────────────────────────────────────────────────
 DEPLOY_POLL_INTERVAL = 10   # seconds between deployment status checks
 DEPLOY_POLL_TIMEOUT = 300   # max wait for a deployment to succeed

@@ -119,6 +119,49 @@ class PanelClient:
     def delete_inbound(self, inbound_id: int) -> dict:
         return self._req("POST", f"/panel/api/inbounds/del/{inbound_id}")
 
+    # ── node management ────────────────────────────────────────
+    def get_uuid(self) -> str:
+        d = self._req("GET", "/panel/api/server/getNewUUID")
+        return (d.get("obj") or {}).get("uuid", "")
+
+    def create_api_token(self, name: str = "node-token") -> str:
+        tokens = self._req("GET", "/panel/api/setting/apiTokens")
+        for t in (tokens.get("obj") or []):
+            try:
+                self._req("POST", f"/panel/api/setting/apiTokens/delete/{t['id']}")
+            except XUIError:
+                pass
+        d = self._req("POST", "/panel/api/setting/apiTokens/create", {"name": name})
+        return (d.get("obj") or {}).get("token", "")
+
+    def add_node(self, node_name: str, node_url: str, node_uuid: str,
+                 node_token: str) -> dict:
+        host = node_url.replace("https://", "").replace("http://", "").rstrip("/")
+        data = {
+            "name": node_name,
+            "address": host,
+            "port": 443,
+            "scheme": "https",
+            "serialNumber": node_uuid,
+            "apiToken": node_token,
+            "trafficLimit": 0,
+            "weight": 100,
+            "remark": f"{node_name} Node",
+            "checkInterval": 60,
+            "checkType": "http",
+            "notify": True,
+            "alertThreshold": 0,
+            "enable": True,
+            "allowPrivateAddress": False,
+            "basePath": "/managepanel/",
+            "inboundSyncMode": "all",
+            "inboundTags": [],
+            "outboundTag": "",
+            "pinnedCertSha256": "",
+            "tlsVerifyMode": "skip",
+        }
+        return self._req("POST", "/panel/api/nodes/add", data)
+
 
 # ── helpers ────────────────────────────────────────────────────
 def build_vless_link(domain: str, uuid: str, path: str = "/cdn", name: str = "config") -> str:
