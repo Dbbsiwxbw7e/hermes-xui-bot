@@ -350,6 +350,17 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         update.message = q.message  # cmd_deploy uses update.message.reply_text
         await cmd_deploy(update, ctx)
         return
+    if data == "refresh_menu":
+        uid = update.effective_user.id
+        refresh_active(ctx, uid)
+        name = update.effective_user.first_name or ""
+        await q.edit_message_text(
+            ui.welcome_msg(name, ctx.user_data.get("_active_label", "")),
+            reply_markup=ui.MENU, parse_mode="HTML")
+        return
+    if data == "noop":
+        await q.answer("این همون اکانت فعاله ✅", show_alert=True)
+        return
     if data == "sec_account":
         await show_accounts(q, ctx, update.effective_user.id)
         return
@@ -361,7 +372,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # section-specific callbacks
-    if data.startswith("acc") or data.startswith("noop"):
+    if data.startswith("acc"):
         await handle_account_callback(update, ctx, q, data)
         return
     if data.startswith("depdom") or data == "dep_domain_hint":
