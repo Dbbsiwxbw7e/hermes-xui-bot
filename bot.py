@@ -397,6 +397,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "sec_inbound":
         await show_inbound_section(update, ctx, q)
         return
+    if data == "sec_proxy":
+        await show_proxy_section(update, ctx, q)
+        return
+    if data == "px_soon":
+        await q.answer("🚧 در حال ساخت — بعداً محتواش رو می‌سازیم!", show_alert=True)
+        return
 
     # section-specific callbacks
     if data.startswith("acc"):
@@ -404,6 +410,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("depdom") or data == "dep_domain_hint":
         await handle_deploy_callback(update, ctx, q, data)
+        return
+    if data == "dep_nodes":
+        refresh_active(ctx, update.effective_user.id)
+        await link_nodes_flow(update, ctx)
         return
     if data.startswith("inb"):
         await handle_inbound_callback(update, ctx, q, data)
@@ -442,6 +452,95 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── TCP Proxy callbacks ──
     await handle_tcp_callback(update, ctx, q, data)
+
+
+
+# ── Node linking (standalone flow from deploy section) ─────────
+async def link_nodes_flow(update, ctx):
+    """Link deployed panels to the MAIN panel as nodes — on demand."""
+    uid = update.effective_user.id
+    deployed = [p for p in (ctx.user_data.get("deployed_panels") or []) if p.get("url")]
+
+    # rediscover if session is empty: use newest project's services + domains
+    if not deployed:
+        api = get_api(ctx)
+        try:
+            projects = sorted(await run_blocking(api.list_projects),
+                              key=lambda x: x.get("createdAt", ""), reverse=True)
+            if not projects:
+                await q_edit_or_reply(update, ui.header("پنلی پیدا نشد 📭"))
+                return
+            proj = projects[0]
+            tcp_api = TCPProxyAPI(active_token(ctx))
+            env_id = await run_blocking(tcp_api.find_env, proj["id"])
+            services = await run_blocking(tcp_api.list_services, proj["id"])
+            for s in services:
+                try:
+                    domain = await run_blocking(api.create_domain, s["id"], env_id, 3000)
+                except Exception:
+                    domain = ""
+                if domain:
+                    deployed.append({"name": s["name"], "service_id": s["id"],
+                                     "url": f"https://{domain}"})
+            ctx.user_data["deployed_panels"] = deployed
+        except Exception as e:
+            await q_edit_or_reply(update, f"{ui.header('خطا ⛔️')}\n\n❌ {e}")
+            return
+
+    main = next((p for p in deployed if p["name"] == config.MAIN_PANEL), None)
+    if not main:
+        await q_edit_or_reply(update,
+            f"{ui.header('پنل اصلی نیست ⛔️')}\n\n"
+            f"پنل اصلی <b>{config.MAIN_PANEL}</b> توی لیست پنل‌های دپلوی‌شده پیدا نشد.")
+        return
+
+    others = [p for p in deployed if p.get("url") and p["name"] != config.MAIN_PANEL]
+    if not others:
+        await q_edit_or_reply(update,
+            f"{ui.header('چیزی برای اتصال نیست 📭')}\n\n"
+            "فقط پنل اصلی هست؛ نودی برای اتصال وجود نداره.")
+        return
+
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+    status = await origin.reply_text(
+        ui.header(f'🔗 اتصال نودها به {config.MAIN_PANEL}...'), parse_mode="HTML")
+
+    lines = []
+    async def link_one(p):
+        def _work():
+            mp = PanelClient(main["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not mp.login():
+                raise XUIError("ورود به پنل اصلی ناموفق")
+            np = PanelClient(p["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not np.login():
+                raise XUIError(f"ورود به {p['name']} ناموفق")
+            nuuid = np.get_uuid()
+            ntoken = np.create_api_token()
+            res = mp.add_node(p["name"], p["url"], nuuid, ntoken)
+            if not res.get("success"):
+                raise XUIError(res.get("msg", "ناموفق"))
+        try:
+            await run_blocking(_work)
+            lines.append(f"✅ <b>{p['name']}</b> → متصل شد")
+        except Exception as e:
+            lines.append(f"⚠️ <b>{p['name']}</b> → {str(e)[:60]}")
+        await say(status,
+                  ui.header(f'🔗 اتصال نودها به {config.MAIN_PANEL}')
+                  + f"\n{ui.SEP}\n" + "\n".join(lines))
+
+    for p in others:
+        await link_one(p)
+
+    await say(status,
+              ui.header('نتیجه اتصال نودها 🔗') + f"\n{ui.SEP}\n"
+              + "\n".join(lines)
+              + f"\n\n🏠 نود اصلی: <b>{config.MAIN_PANEL}</b>")
+
+
+
+async def show_proxy_section(update, ctx, q):
+    await q.edit_message_text(ui.PROXY_WELCOME,
+                              reply_markup=ui.proxy_menu(), parse_mode="HTML")
 
 
 # ════════════════════════════════════════════════════════════════

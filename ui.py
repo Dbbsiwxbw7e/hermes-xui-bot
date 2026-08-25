@@ -42,10 +42,19 @@ MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("👤 اکانت‌ها", callback_data="sec_account"),
      InlineKeyboardButton("🚀 دپلوی", callback_data="sec_deploy")],
     [InlineKeyboardButton("🛰 TCP Proxy", callback_data="go_tcp"),
-     InlineKeyboardButton("📥 اینباندها", callback_data="sec_inbound")],
-    [InlineKeyboardButton("📊 وضعیت", callback_data="go_status"),
-     InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help")],
+     InlineKeyboardButton("🕸 Proxy", callback_data="sec_proxy")],
+    [InlineKeyboardButton("📥 اینباندها", callback_data="sec_inbound"),
+     InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
+    [InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help")],
 ])
+
+WELCOME_BODY = (
+    "👤 <b>اکانت‌ها</b> — چند اکانت Railway، سوییچ آنی\n"
+    "🚀 <b>دپلوی</b> — ساخت پنل + اتصال خودکار نودها\n"
+    "🛰 <b>TCP Proxy</b> — چرخش با پورت و تعداد دلخواه\n"
+    "🕸 <b>Proxy</b> — بخش ویژه (به‌زودی)\n"
+    "📥 <b>اینباندها</b> — VLESS+TLS و لینک آماده\n\n"
+)
 
 BACK_MAIN = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
@@ -61,6 +70,7 @@ def welcome_msg(name: str = "", account_label: str = "") -> str:
         "👤 <b>اکانت‌ها</b> — چند اکانت، سوییچ آنی\n"
         "🚀 <b>دپلوی</b> — ساخت پنل + اتصال خودکار نودها\n"
         "🛰 <b>TCP Proxy</b> — چرخش با پورت و تعداد دلخواه\n"
+        "🕸 <b>Proxy</b> — بخش ویژه (به‌زودی)\n"
         "📥 <b>اینباندها</b> — VLESS+TLS و لینک آماده\n\n"
         f"{SEP}\n👇 یک بخش رو انتخاب کن:"
     )
@@ -302,6 +312,7 @@ def deploy_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🚀 دپلوی جدید (همه پنل‌ها)", callback_data="go_deploy")],
         [InlineKeyboardButton("🌐 ست کردن دامنه", callback_data="dep_domain_hint")],
+        [InlineKeyboardButton("🔗 اتصال نودها", callback_data="dep_nodes")],
         [InlineKeyboardButton("🗑 حذف پنل/پروژه", callback_data="go_delete")],
         [InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
         [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
@@ -309,8 +320,9 @@ def deploy_menu() -> InlineKeyboardMarkup:
 
 DEPLOY_WELCOME = (
     f"{header('بخش دپلوی 🚀')}\n\n"
-    "🚀 <b>دپلوی جدید</b> — ساخت همه پنل‌های config + انتظار SUCCESS\n"
+    "🚀 <b>دپلوی جدید</b> — ساخت همه پنل‌ها + اتصال خودکار نودها\n"
     "🌐 <b>ست کردن دامنه</b> — دامنه دلخواهت رو به پنل وصل کن\n"
+    "🔗 <b>اتصال نودها</b> — وصل کردن دستی پنل‌ها به پنل اصلی\n"
     "🗑 <b>حذف</b> — پنل یا کل پروژه رو پاک کن\n"
     "📊 <b>وضعیت</b> — لیست زنده پروژه‌ها\n\n"
     f"{SEP}\n👇 انتخاب کن:"
@@ -335,3 +347,18 @@ INBOUND_WELCOME = (
     f"{SEP}\n👇 انتخاب کن:"
 )
 
+
+
+# ── Section: proxy (placeholder — content coming later) ───────
+def proxy_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚧 به‌زودی...", callback_data="px_soon")],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
+    ])
+
+PROXY_WELCOME = (
+    f"{header('بخش Proxy 🕸')}\n\n"
+    "این بخش در حال ساخت است 🚧\n"
+    "محتواش رو بعداً مشخص می‌کنیم.\n\n"
+    f"{SEP}\n👇 فعلاً از بقیه بخش‌ها استفاده کن:"
+)
