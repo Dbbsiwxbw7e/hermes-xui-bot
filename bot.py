@@ -370,11 +370,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not active_token(ctx):
             await q.edit_message_text(
                 ui.NOT_CONNECTED,
-                reply_markup=ui.InlineKeyboardMarkup([[
-                    ui.InlineKeyboardButton("👤 رفتن به اکانت‌ها", callback_data="sec_account")]]),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("👤 رفتن به اکانت‌ها", callback_data="sec_account")]]),
                 parse_mode="HTML")
             return
-        update.message = q.message
         await cmd_deploy(update, ctx)
         return
     if data == "refresh_menu":
@@ -421,7 +420,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if data == "go_link":
         refresh_active(ctx, update.effective_user.id)
-        update.message = q.message
         await cmd_link(update, ctx)
         return
     if data == "go_tcp":
@@ -429,7 +427,6 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if data == "go_status":
         refresh_active(ctx, update.effective_user.id)
-        update.message = q.message
         await cmd_status(update, ctx)
         return
     if data.startswith("del:"):
@@ -1070,6 +1067,21 @@ async def handle_tcp_callback(update, ctx, q, data: str):
                   "برای پنل دیگه: 🛰 /tcp")
 
 
+
+async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
+    log.exception("Unhandled error", exc_info=ctx.error)
+    try:
+        q = getattr(update, "callback_query", None)
+        msg = getattr(update, "effective_message", None) or (q.message if q else None)
+        if msg:
+            await msg.reply_text(
+                f"{ui.header('خطای غیرمنتظره ⛔️')}\n\n"
+                f"<code>{str(ctx.error)[:200]}</code>\n\nدوباره تلاش کن.",
+                parse_mode="HTML")
+    except Exception:
+        pass
+
+
 # ── main ───────────────────────────────────────────────────────
 def main():
     if not config.BOT_TOKEN:
@@ -1086,6 +1098,7 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
 
     log.info("Hermes X-UI bot started")
     app.run_polling()
