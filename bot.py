@@ -264,6 +264,47 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 @require_token
+async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    deployed = ctx.user_data.get("deployed_panels", [])
+    if not deployed:
+        await q_edit_or_reply(update, ui.LINKS_EMPTY)
+        return
+
+    origin = update.message or (update.callback_query.message if update.callback_query else None)
+    status = await origin.reply_text(
+        ui.deploy_step(0, 3, "🔗 ساخت اینباند و لینک..."), parse_mode="HTML")
+
+    links = []
+    for i, p in enumerate(deployed, start=1):
+        if not p.get("url"):
+            continue
+        await say(status, ui.deploy_step(i - 1, 3, f"⚙️ پردازش {p['name']}..."))
+
+        def _do():
+            client = PanelClient(p["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not client.login():
+                raise XUIError(f"ورود به پنل {p['name']} شکست خورد")
+            u = str(uuid.uuid4())
+            res = client.create_vless_tls_inbound(
+                uuid=u, email=f"{p['name'].lower()}-user",
+                domain=p["url"].replace("https://", "").rstrip("/"),
+                port=config.INBOUND_PORT, path=config.INBOUND_PATH)
+            if not res.get("success"):
+                raise XUIError(f"{p['name']}: {res.get('msg', 'unknown')}")
+            return build_vless_link(p["url"], u, config.INBOUND_PATH,
+                                    f"Hermes-{p['name']}")
+
+        try:
+            link = await run_blocking(_do)
+            links.append((p["name"], link))
+        except Exception as e:
+            log.warning("link %s failed: %s", p["name"], e)
+            links.append((p["name"], f"⚠️ خطا: {str(e)[:80]}"))
+
+    await say(status, ui.links_summary(links))
+
+
+@require_token
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     api = get_api(ctx)
     if not api:
