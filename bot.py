@@ -125,10 +125,8 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ws_id, email = await run_blocking(api.whoami)
         proj = await run_blocking(api.create_project, config.PROJECT_NAME, ws_id)
         project_id = proj["id"]
-        environment_id = proj.get("environmentId", "")
-        if not environment_id:
-            envs = await run_blocking(api.get_environments, project_id)
-            environment_id = envs[0]["id"] if envs else ""
+        envs = await run_blocking(api.get_environments, project_id)
+        environment_id = envs[0]["id"] if envs else ""
         await say(status, ui.deploy_step(1, total_steps,
                    f"📦 پروژه ساخته شد: <code>{config.PROJECT_NAME}</code>"))
     except RailwayError as e:

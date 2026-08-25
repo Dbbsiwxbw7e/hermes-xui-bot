@@ -54,7 +54,7 @@ class RailwayAPI:
     def create_project(self, name: str, workspace_id: str) -> dict:
         d = self._gql(
             """mutation($input: ProjectCreateInput!) {
-                 projectCreate(input: $input) { id name environmentId }
+                 projectCreate(input: $input) { id name }
                }""",
             {"input": {"name": name, "workspaceId": workspace_id}},
         )
