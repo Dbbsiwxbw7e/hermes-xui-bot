@@ -77,14 +77,15 @@ async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     token = ctx.args[0]
     api = RailwayAPI(token)
-    status = await update.message.reply_text("🔍 در حال بررسی توکن...")
+    status = await update.message.reply_text(
+        f"{ui.header('در حال بررسی توکن... 🔍')}", parse_mode="HTML")
     try:
         ws_id, email = await run_blocking(api.whoami)
         ctx.user_data["railway_token"] = token
         ctx.user_data["workspace_id"] = ws_id
-        await say(status, f"✅ متصل شدی!\n👤 <code>{email}</code>\n\nحالا بزن 🚀 /deploy")
+        await say(status, ui.connected_msg(email))
     except RailwayError as e:
-        await say(status, f"❌ توکن قبول نشد:\n<code>{e}</code>")
+        await say(status, ui.TOKEN_INVALID + f"\n\n<code>{e}</code>")
 
 
 @require_token
@@ -140,6 +141,10 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await say(status, "❌ هیچ سرویسی ساخته نشد")
         return
 
+    # track all provisioned panels for the final report
+    ctx.user_data["deployed_panels"] = list(panels)
+    provisioned = list(panels)
+
     # 3) poll deployments until SUCCESS (real verification!)
     deadline = asyncio.get_event_loop().time() + config.DEPLOY_POLL_TIMEOUT
     while panels and asyncio.get_event_loop().time() < deadline:
@@ -148,6 +153,7 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         for p in panels:
             d = await run_blocking(api.latest_deployment, p["service_id"])
             st = (d or {}).get("status", "")
+            p["status"] = st or "WAITING"
             if st == "SUCCESS":
                 p["ready"] = True
                 if not p["url"] and d.get("staticUrl"):
@@ -157,42 +163,30 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 pending.append(p)
 
-        done = sum(1 for p in panels if p.get("ready") or p.get("failed"))
+        done = sum(1 for p in provisioned if p.get("ready") or p.get("failed"))
         await say(status, ui.deploy_step(
-            2, total_steps, f"📡 در انتظار SUCCESS... ({done}/{len(panels)})",
-            ui.panel_summary(panels)))
+            2, total_steps, f"📡 در انتظار SUCCESS... ({done}/{len(provisioned)})",
+            ui.panel_summary(provisioned)))
         panels = pending
 
-    # final report — fetch fresh state of everything we created
-    report = f"📊 <b>نتیجه دپلوی</b>\n{ui.DIV}\n"
+    # final report — one fresh query per panel, fancy console output
+    lines = []
     ok = 0
-    for p in list({p['name']: p for p in panels}.values()) or []:
-        pass  # panels now only holds still-pending ones; re-check all
-    all_panels = []
-    for p_cfg in config.PANELS:
-        match = [p for p in ctx.user_data.setdefault("deployed_panels", [])
-                 if p["name"] == p_cfg["name"]]
-        if match:
-            all_panels.append(match[0])
-    ctx.user_data["deployed_panels"] = all_panels
-
-    # merge: re-query latest deployment for each service once more
-    for p in all_panels:
+    for p in provisioned:
         d = await run_blocking(api.latest_deployment, p["service_id"])
-        st = (d or {}).get("status")
-        icon = {"SUCCESS": "✅", "FAILED": "❌", "CRASHED": "💥"}.get(st, "⏳")
+        st = (d or {}).get("status") or "WAITING"
+        p["status"] = st
         if st == "SUCCESS":
             ok += 1
             if not p["url"] and d.get("staticUrl"):
                 p["url"] = f"https://{d['staticUrl']}"
-        report += f"\n{icon} <b>{p['name']}</b>"
-        if p.get("url"):
-            report += f"\n     🌐 {p['url']}/managepanel/"
+        lines.append(ui.status_row(
+            ui.STATUS_ICONS.get(st, "⏳"), p["name"],
+            p.get("url", "").replace("https://", "") + "/managepanel/" if p.get("url") else st))
+    ctx.user_data["deployed_panels"] = provisioned
 
-    report += (f"\n\n{ui.DIV}\n"
-               f"{'🎉 همه آماده‌ان!' if ok == len(all_panels) else '⚠️ بعضی پنل‌ها هنوز آماده نیستن'}\n"
-               "قدم بعدی: 🔗 /link")
-    await say(status, report)
+    await say(status, ui.deploy_report(lines, ok == len(provisioned), ok,
+                                       len(provisioned)))
 
 
 @require_token
@@ -200,9 +194,7 @@ async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     api = get_api(ctx)
     deployed = ctx.user_data.get("deployed_panels", [])
     if not deployed:
-        await update.message.reply_text(
-            f"📭 پنلی توی این جلسه دپلوی نشده.\n{ui.DIV}\nاول بزن: /deploy",
-            parse_mode="HTML")
+        await update.message.reply_text(ui.LINKS_EMPTY, parse_mode="HTML")
         return
 
     status = await update.message.reply_text(
@@ -256,12 +248,13 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if not projects:
-        await say(status, "📭 پروژه‌ای وجود نداره.")
+        await say(status, ui.header('پروژه‌ای نیست 📭'))
         return
 
-    txt = f"📊 <b>پروژه‌های Railway</b>\n{ui.DIV}\n"
+    txt = f"{ui.header('پروژه‌های Railway 📦')}\n{ui.SEP}\n"
     for p in sorted(projects, key=lambda x: x.get("createdAt", ""), reverse=True)[:10]:
-        txt += f"\n📦 <b>{p['name']}</b>\n     <code>{p['id']}</code>"
+        txt += f"\n📦 <b>{p['name']}</b>\n     └ <code>{p['id'][:8]}</code>"
+    txt += f"\n\n{ui.BOT}\n📊 مجموعه: <b>{len(projects)}</b> پروژه"
     await say(status, txt)
 
 
@@ -293,30 +286,36 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     route = {
         "go_help": lambda: q.edit_message_text(ui.HELP_TEXT, parse_mode="HTML"),
-        "cancel": lambda: q.edit_message_text("❌ لغو شد."),
+        "cancel": lambda: q.edit_message_text(ui.CANCELLED, parse_mode="HTML"),
+        "go_delete": lambda: cmd_delete(update, ctx),
     }
+
+    async def hint(text):
+        await q.edit_message_text(
+            f"{ui.header('راهنمای سریع 💡')}\n\n{text}", parse_mode="HTML")
 
     if data == "go_deploy":
         if not ctx.user_data.get("railway_token"):
             await q.edit_message_text(ui.NOT_CONNECTED, parse_mode="HTML")
         else:
-            await q.edit_message_text("برای شروع دستور رو بزن: 🚀 /deploy",
-                                      parse_mode="HTML")
+            await hint("برای شروع دپلوی دستور رو بزن:\n🚀 <code>/deploy</code>")
         return
     if data == "go_link":
-        await q.edit_message_text("برای ساخت لینک بزن: 🔗 /link", parse_mode="HTML")
+        await hint("برای ساخت لینک اتصال بزن:\n🔗 <code>/link</code>")
         return
     if data == "go_status":
-        await q.edit_message_text("برای وضعیت بزن: 📊 /status", parse_mode="HTML")
+        await hint("برای دیدن وضعیت بزن:\n📊 <code>/status</code>")
         return
     if data.startswith("del:"):
         api = get_api(ctx)
         pid = data.split(":", 1)[1]
         try:
             ok = await run_blocking(api.delete_project, pid)
-            msg = "✅ پروژه حذف شد!" if ok else "❌ حذف ناموفق"
+            icon = "✅" if ok else "❌"
+            title = "حذف موفق ✅" if ok else "حذف ناموفق ⛔️"
+            msg = f"{ui.header(title)}\n\n{icon} پروژه حذف شد."
         except RailwayError as e:
-            msg = f"❌ {e}"
+            msg = f"{ui.header('خطا ⛔️')}\n\n❌ {e}"
         await q.edit_message_text(msg, parse_mode="HTML")
         return
 
