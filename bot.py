@@ -2,7 +2,6 @@
 Hermes X-UI Bot — entry point and handlers.
 
 Flow:
-  /connect → store Railway token in RAM (user_data)
   /deploy  → create project + services, deploy, poll until SUCCESS,
              generate domains
   /link    → login to each panel, create VLESS+TLS inbound,
@@ -90,36 +89,11 @@ def run_blocking(fn, *args):
 # ── commands ───────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    refresh_active(ctx, uid)  # load active account token if exists
-    await update.message.reply_text(ui.WELCOME, reply_markup=ui.MENU, parse_mode="HTML")
-
-
-async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Legacy quick-add: /connect TOKEN — saves as account 'default'."""
-    if not ctx.args:
-        await update.message.reply_text(
-            f"🔑 <b>اتصال به Railway</b>\n{ui.DIV}\n"
-            "<code>/connect TOKEN</code>\n\n"
-            "💡 بهتره از بخش 👤 اکانت‌ها استفاده کنی تا چند اکانت داشته باشی.",
-            parse_mode="HTML",
-        )
-        return
-
-    token = ctx.args[0]
-    api = RailwayAPI(token)
-    status = await update.message.reply_text(
-        f"{ui.header('در حال بررسی توکن... 🔍')}", parse_mode="HTML")
-    try:
-        ws_id, email = await run_blocking(api.whoami)
-        uid = update.effective_user.id
-        label = f"acc-{len(ACCOUNTS.labels(uid)) + 1}"
-        ACCOUNTS.add(uid, label, token, email)
-        ACCOUNTS.set_active(uid, label)
-        refresh_active(ctx, uid)
-        ctx.user_data["workspace_id"] = ws_id
-        await say(status, ui.connected_msg(email))
-    except RailwayError as e:
-        await say(status, ui.TOKEN_INVALID + f"\n\n<code>{e}</code>")
+    refresh_active(ctx, uid)
+    name = update.effective_user.first_name or ""
+    await update.message.reply_text(
+        ui.welcome_msg(name, ctx.user_data.get("_active_label", "")),
+        reply_markup=ui.MENU, parse_mode="HTML")
 
 
 @require_token
@@ -132,8 +106,8 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # 1) project
     project_id = environment_id = ""
     try:
-        proj = await run_blocking(api.create_project, config.PROJECT_NAME,
-                                  ctx.user_data["workspace_id"])
+        ws_id, email = await run_blocking(api.whoami)
+        proj = await run_blocking(api.create_project, config.PROJECT_NAME, ws_id)
         project_id = proj["id"]
         environment_id = proj.get("environmentId", "")
         if not environment_id:
@@ -947,7 +921,6 @@ def main():
     app.add_handler(CommandHandler("tcp", tcp_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-    app.add_handler(CommandHandler("connect", cmd_connect))
     app.add_handler(CommandHandler("deploy", cmd_deploy))
     app.add_handler(CommandHandler("link", cmd_link))
     app.add_handler(CommandHandler("status", cmd_status))

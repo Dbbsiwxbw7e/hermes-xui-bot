@@ -51,14 +51,19 @@ BACK_MAIN = InlineKeyboardMarkup([
     [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
 ])
 
-WELCOME = (
-    f"{header('دستیار هوشمند دپلوی 3x-ui')}\n\n"
-    "👤 <b>اکانت‌ها</b> — چند اکانت Railway، سوییچ راحت\n"
-    "🚀 <b>دپلوی</b> — ساخت پنل، دامنه، حذف\n"
-    "🛰 <b>TCP Proxy</b> — چرخش با پورت و تعداد دلخواه\n"
-    "📥 <b>اینباندها</b> — ساخت VLESS+TLS و لینک آماده\n\n"
-    f"{SEP}\n👇 یک بخش رو انتخاب کن:"
-)
+def welcome_msg(name: str = "", account_label: str = "") -> str:
+    who = f", <b>{name}</b>" if name else ""
+    badge = f"👤 اکانت فعال: <b>{account_label}</b>\n" if account_label else "⚪️ هنوز اکانتی ثبت نشده\n"
+    return (
+        f"{header(f'سلام{who} 👋')}\n\n"
+        f"{badge}"
+        "🛰 کنترل‌پنل کامل 3x-ui روی Railway:\n\n"
+        "👤 <b>اکانت‌ها</b> — چند اکانت، سوییچ آنی\n"
+        "🚀 <b>دپلوی</b> — ساخت پنل + اتصال خودکار نودها\n"
+        "🛰 <b>TCP Proxy</b> — چرخش با پورت و تعداد دلخواه\n"
+        "📥 <b>اینباندها</b> — VLESS+TLS و لینک آماده\n\n"
+        f"{SEP}\n👇 یک بخش رو انتخاب کن:"
+    )
 
 HELP_TEXT = (
     f"{header('راهنمای کامل')}\n\n"
@@ -82,16 +87,12 @@ HELP_TEXT = (
 
 NOT_CONNECTED = (
     f"{header('قفل شد! 🔒')}\n\n"
-    "برای ادامه اول به Railway وصل شو:\n\n"
-    "<code>/connect TOKEN</code>\n\n"
-    f"{BOT}\n💡 توکن از داشبورد Railway بخش Tokens گرفته میشه."
+    "اول از بخش 👤 <b>اکانت‌ها</b> یه اکانت Railway اضافه کن.\n\n"
+    f"{BOT}\n💡 توکن از dashboard.railway.com → Tokens گرفته میشه."
 )
 
-CANCELLED = f"{header}عملیات لغو شد ❌".replace("{header}", header('انصراف')) if False else (
-    f"{header('انصراف')}\n\n❌ عملیات لغو شد."
-)
+CANCELLED = f"{header('انصراف')}\n\n❌ عملیات لغو شد."
 
-CONNECTED_OK = "{email}"
 def connected_msg(email: str) -> str:
     return (
         f"{header('اتصال برقرار شد ✅')}\n\n"
