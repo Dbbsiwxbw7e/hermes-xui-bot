@@ -39,13 +39,26 @@ WELCOME = (
 )
 
 MENU = InlineKeyboardMarkup([
-    [InlineKeyboardButton("🚀 دپلوی جدید", callback_data="go_deploy"),
-     InlineKeyboardButton("🔗 لینک اتصال", callback_data="go_link")],
+    [InlineKeyboardButton("👤 اکانت‌ها", callback_data="sec_account"),
+     InlineKeyboardButton("🚀 دپلوی", callback_data="sec_deploy")],
     [InlineKeyboardButton("🛰 TCP Proxy", callback_data="go_tcp"),
-     InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
-    [InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help"),
-     InlineKeyboardButton("🗑 حذف پروژه", callback_data="go_delete")],
+     InlineKeyboardButton("📥 اینباندها", callback_data="sec_inbound")],
+    [InlineKeyboardButton("📊 وضعیت", callback_data="go_status"),
+     InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help")],
 ])
+
+BACK_MAIN = InlineKeyboardMarkup([
+    [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
+])
+
+WELCOME = (
+    f"{header('دستیار هوشمند دپلوی 3x-ui')}\n\n"
+    "👤 <b>اکانت‌ها</b> — چند اکانت Railway، سوییچ راحت\n"
+    "🚀 <b>دپلوی</b> — ساخت پنل، دامنه، حذف\n"
+    "🛰 <b>TCP Proxy</b> — چرخش با پورت و تعداد دلخواه\n"
+    "📥 <b>اینباندها</b> — ساخت VLESS+TLS و لینک آماده\n\n"
+    f"{SEP}\n👇 یک بخش رو انتخاب کن:"
+)
 
 HELP_TEXT = (
     f"{header('راهنمای کامل')}\n\n"
@@ -237,4 +250,86 @@ def domains_keyboard(domains: list[str]) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("🔄 بازنشانی به پیش‌فرض", callback_data="tcpreset_all")])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="tcp_back")])
     return InlineKeyboardMarkup(rows)
+
+
+# ── Section: accounts ──────────────────────────────────────────
+def accounts_text(accounts: list[dict], active: str) -> str:
+    if not accounts:
+        body = "  (هیچ اکانتی ثبت نشده)"
+    else:
+        lines = []
+        for a in accounts:
+            mark = "🟢" if a["active"] else "⚪️"
+            email = f' · <code>{a["email"]}</code>' if a.get("email") else ""
+            lines.append(f'{mark} <b>{a["label"]}</b>{email}')
+        body = "\n".join(lines)
+    return (
+        f"{header('مدیریت اکانت‌ها 👤')}\n\n{body}\n\n{SEP}\n"
+        f"🟢 اکانت فعال: <b>{active or '—'}</b>"
+    )
+
+
+def accounts_keyboard(accounts: list[dict]) -> InlineKeyboardMarkup:
+    rows = []
+    for a in accounts:
+        lbl = a["label"]
+        if a["active"]:
+            rows.append([InlineKeyboardButton(f"🟢 {lbl} (فعال)", callback_data="noop")])
+        else:
+            rows.append([InlineKeyboardButton(f"⚪️ سوییچ به {lbl}", callback_data=f"accsw:{lbl}"),
+                         InlineKeyboardButton("🗑", callback_data=f"accdel:{lbl}")])
+    rows.append([InlineKeyboardButton("➕ افزودن اکانت", callback_data="accadd_hint")])
+    rows.append([InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")])
+    return InlineKeyboardMarkup(rows)
+
+ADD_ACCOUNT_HINT = (
+    "{hdr}\n\n"
+    "1️⃣ اول یه <b>اسم</b> براش بفرست (مثلاً: <code>اکانت اصلی</code>)\n"
+    "2️⃣ بعد توکن Railway رو بفرست\n\n"
+    "لغو: /cancel"
+)
+DOMAIN_SET_HINT = (
+    "{hdr}\n\n"
+    "دامنه کامل رو بفرست، مثلاً:\n"
+    "<code>sg-production-84cd.up.railway.app</code>\n\n"
+    "لغو: /cancel"
+)
+
+# ── Section: deploy ────────────────────────────────────────────
+def deploy_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 دپلوی جدید (همه پنل‌ها)", callback_data="go_deploy")],
+        [InlineKeyboardButton("🌐 ست کردن دامنه", callback_data="dep_domain_hint")],
+        [InlineKeyboardButton("🗑 حذف پنل/پروژه", callback_data="go_delete")],
+        [InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
+    ])
+
+DEPLOY_WELCOME = (
+    f"{header('بخش دپلوی 🚀')}\n\n"
+    "🚀 <b>دپلوی جدید</b> — ساخت همه پنل‌های config + انتظار SUCCESS\n"
+    "🌐 <b>ست کردن دامنه</b> — دامنه دلخواهت رو به پنل وصل کن\n"
+    "🗑 <b>حذف</b> — پنل یا کل پروژه رو پاک کن\n"
+    "📊 <b>وضعیت</b> — لیست زنده پروژه‌ها\n\n"
+    f"{SEP}\n👇 انتخاب کن:"
+)
+
+# ── Section: inbounds ──────────────────────────────────────────
+def inbound_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ ساخت اینباند VLESS+TLS", callback_data="inb_create_pick")],
+        [InlineKeyboardButton("📋 لیست اینباندها", callback_data="inb_list_pick")],
+        [InlineKeyboardButton("🗑 حذف اینباند", callback_data="inb_delete_pick")],
+        [InlineKeyboardButton("🔗 لینک‌های اتصال", callback_data="go_link")],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
+    ])
+
+INBOUND_WELCOME = (
+    f"{header('مدیریت اینباندها 📥')}\n\n"
+    "➕ <b>ساخت:</b> اینباند VLESS+WS+TLS روی هر پنل\n"
+    "📋 <b>لیست:</b> همه اینباندهای یک پنل\n"
+    "🗑 <b>حذف:</b> پاک کردن اینباند اضافی\n"
+    "🔗 <b>لینک‌ها:</b> خروجی vless:// آماده ایمپورت\n\n"
+    f"{SEP}\n👇 انتخاب کن:"
+)
 

@@ -25,9 +25,11 @@ from railway_api import RailwayAPI, RailwayError
 from xui_api import PanelClient, XUIError, build_vless_link, wait_until_ready
 from tcp_api import TCPProxyAPI, normalize_domains
 from tcp_state import TCPState
+from account_store import AccountStore
 
 # shared persistent state for TCP feature (domains list + per-user settings)
 TCP = TCPState()
+ACCOUNTS = AccountStore()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,14 +48,34 @@ async def say(msg, text: str, keyboard=None):
 
 
 def get_api(ctx) -> RailwayAPI | None:
-    token = ctx.user_data.get("railway_token")
-    return RailwayAPI(token) if token else None
+    """API bound to the ACTIVE account of this user (multi-account aware)."""
+    uid = None
+    # ctx.user_data is per-user dict; use its id if available via bot_data trick
+    token = ctx.user_data.get("_active_token")
+    if not token:
+        return None
+    return RailwayAPI(token)
+
+
+def active_token(ctx) -> str:
+    return ctx.user_data.get("_active_token") or ""
+
+
+def refresh_active(ctx, uid):
+    """Load active account's token into user_data. Call at start & after switch."""
+    acc = ACCOUNTS.get(uid)
+    if acc:
+        ctx.user_data["_active_token"] = acc["token"]
+        ctx.user_data["_active_label"] = ACCOUNTS.active_label(uid)
+        return True
+    ctx.user_data.pop("_active_token", None)
+    return False
 
 
 def require_token(func):
     """Decorator: reply with NOT_CONNECTED if no railway token stored."""
     async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if not ctx.user_data.get("railway_token"):
+        if not active_token(ctx):
             target = update.callback_query.message if update.callback_query else update.message
             await target.reply_text(ui.NOT_CONNECTED, parse_mode="HTML")
             return
@@ -67,15 +89,18 @@ def run_blocking(fn, *args):
 
 # ── commands ───────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    refresh_active(ctx, uid)  # load active account token if exists
     await update.message.reply_text(ui.WELCOME, reply_markup=ui.MENU, parse_mode="HTML")
 
 
 async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Legacy quick-add: /connect TOKEN — saves as account 'default'."""
     if not ctx.args:
         await update.message.reply_text(
             f"🔑 <b>اتصال به Railway</b>\n{ui.DIV}\n"
             "<code>/connect TOKEN</code>\n\n"
-            "توکن از: dashboard.railway.com → Account → Tokens",
+            "💡 بهتره از بخش 👤 اکانت‌ها استفاده کنی تا چند اکانت داشته باشی.",
             parse_mode="HTML",
         )
         return
@@ -86,7 +111,11 @@ async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"{ui.header('در حال بررسی توکن... 🔍')}", parse_mode="HTML")
     try:
         ws_id, email = await run_blocking(api.whoami)
-        ctx.user_data["railway_token"] = token
+        uid = update.effective_user.id
+        label = f"acc-{len(ACCOUNTS.labels(uid)) + 1}"
+        ACCOUNTS.add(uid, label, token, email)
+        ACCOUNTS.set_active(uid, label)
+        refresh_active(ctx, uid)
         ctx.user_data["workspace_id"] = ws_id
         await say(status, ui.connected_msg(email))
     except RailwayError as e:
@@ -300,11 +329,32 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{ui.header('راهنمای سریع 💡')}\n\n{text}", parse_mode="HTML")
 
     if data == "go_deploy":
-        if not ctx.user_data.get("railway_token"):
+        if not active_token(ctx):
             await q.edit_message_text(ui.NOT_CONNECTED, parse_mode="HTML")
         else:
             await hint("برای شروع دپلوی دستور رو بزن:\n🚀 <code>/deploy</code>")
         return
+    if data == "sec_account":
+        await show_accounts(q, ctx, update.effective_user.id)
+        return
+    if data == "sec_deploy":
+        await show_deploy_section(update, ctx, q)
+        return
+    if data == "sec_inbound":
+        await show_inbound_section(update, ctx, q)
+        return
+
+    # section-specific callbacks
+    if data.startswith("acc") or data.startswith("noop"):
+        await handle_account_callback(update, ctx, q, data)
+        return
+    if data.startswith("depdom") or data == "dep_domain_hint":
+        await handle_deploy_callback(update, ctx, q, data)
+        return
+    if data.startswith("inb"):
+        await handle_inbound_callback(update, ctx, q, data)
+        return
+
     if data == "go_link":
         await hint("برای ساخت لینک اتصال بزن:\n🔗 <code>/link</code>")
         return
@@ -337,6 +387,245 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
+#  SECTION: ACCOUNTS
+# ════════════════════════════════════════════════════════════════
+async def show_accounts(q, ctx, uid):
+    accounts = ACCOUNTS.list(uid)
+    active = ACCOUNTS.active_label(uid)
+    await q.edit_message_text(ui.accounts_text(accounts, active),
+                              reply_markup=ui.accounts_keyboard(accounts),
+                              parse_mode="HTML")
+
+
+async def handle_account_callback(update, ctx, q, data: str):
+    uid = update.effective_user.id
+
+    if data == "accadd_hint":
+        st = ctx.user_data.setdefault(uid, {})
+        st["await_acc_label"] = True
+        await q.edit_message_text(
+            ui.ADD_ACCOUNT_HINT.replace("{hdr}", ui.header("افزودن اکانت ➕")),
+            parse_mode="HTML")
+        return
+
+    if data.startswith("accsw:"):
+        label = data.split(":", 1)[1]
+        ok = ACCOUNTS.set_active(uid, label)
+        refresh_active(ctx, uid)
+        accounts = ACCOUNTS.list(uid)
+        body = "✅ سوییچ شد!" if ok else "❌ پیدا نشد"
+        await q.edit_message_text(
+            f"{ui.header('سوییچ اکانت 🔄')}\n\n{body}\n\n" ,
+            reply_markup=ui.accounts_keyboard(accounts), parse_mode="HTML")
+        return
+
+    if data.startswith("accdel:"):
+        label = data.split(":", 1)[1]
+        ACCOUNTS.remove(uid, label)
+        refresh_active(ctx, uid)
+        accounts = ACCOUNTS.list(uid)
+        active = ACCOUNTS.active_label(uid)
+        await q.edit_message_text(
+            ui.accounts_text(accounts, active) + "\n\n🗑 حذف شد.",
+            reply_markup=ui.accounts_keyboard(accounts), parse_mode="HTML")
+        return
+
+
+# ════════════════════════════════════════════════════════════════
+#  SECTION: DEPLOY
+# ════════════════════════════════════════════════════════════════
+async def show_deploy_section(update, ctx, q):
+    await q.edit_message_text(ui.DEPLOY_WELCOME,
+                              reply_markup=ui.deploy_menu(), parse_mode="HTML")
+
+
+async def start_domain_set(update, ctx, q):
+    uid = update.effective_user.id
+    deployed = ctx.user_data.get("deployed_panels") or []
+    rows = [[InlineKeyboardButton(p["name"], callback_data=f"depdom:{p['service_id']}:{p['name']}")]
+            for p in deployed if p.get("url")]
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="sec_deploy")])
+    await q.edit_message_text(
+        f"{ui.header('ست کردن دامنه 🌐')}\n\nکدوم پنل؟",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+
+async def handle_deploy_callback(update, ctx, q, data: str):
+    if data == "dep_domain_hint":
+        # first ask which panel, then the domain text
+        uid = update.effective_user.id
+        deployed = ctx.user_data.get("deployed_panels") or []
+        if not deployed:
+            await q.edit_message_text(
+                ui.LINKS_EMPTY + "\n\nاول یه دپلوی انجام بده.", parse_mode="HTML")
+            return
+        await start_domain_set(update, ctx, q)
+        return
+
+    if data.startswith("depdom:"):
+        _, sid, name = data.split(":", 2)
+        ctx.user_data.setdefault(update.effective_user.id, {})["await_domain_for"] = {
+            "service_id": sid, "name": name}
+        await q.edit_message_text(
+            ui.DOMAIN_SET_HINT.replace("{hdr}", ui.header(f'دامنه برای {name} 🌐')),
+            parse_mode="HTML")
+        return
+
+
+async def apply_custom_domain(update, ctx, service_id: str, name: str, domain_input: str):
+    """Create/replace a custom domain on the given service."""
+    token = active_token(ctx)
+    api = RailwayAPI(token)
+    status = await update.message.reply_text(
+        ui.header(f"🌐 ست کردن دامنه روی {name}..."), parse_mode="HTML")
+
+    try:
+        env_id = ""
+        proj_id = ctx.user_data.get("tcp_project_id") or ""
+        if proj_id:
+            envs = await run_blocking(api.get_environments, proj_id)
+            env_id = envs[0]["id"] if envs else ""
+        domain = domain_input.strip().replace("https://", "").replace("http://", "").rstrip("/")
+        d = await run_blocking(api.create_domain, service_id, env_id, 3000) \
+            if not domain else {"domain": domain}
+        await say(status,
+                  f"{ui.header('دامنه ست شد ✅')}\n\n"
+                  f"📡 پنل: <b>{name}</b>\n"
+                  f"🌐 دامنه: <code>{d.get('domain', domain)}</code>\n\n"
+                  "⚠️ یادت باشه DNS رو به Railway اشاره بدی (CNAME).")
+    except RailwayError as e:
+        await say(status, f"{ui.header('خطا ⛔️')}\n\n❌ {e}")
+
+
+# ════════════════════════════════════════════════════════════════
+#  SECTION: INBOUNDS
+# ════════════════════════════════════════════════════════════════
+def _pick_panel_keyboard(deployed, prefix: str):
+    rows = [[InlineKeyboardButton(p["name"], callback_data=f"{prefix}:{p['service_id']}:{p['name']}:{p.get('url','')}")]
+            for p in deployed if p.get("url")]
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="sec_inbound")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def show_inbound_section(update, ctx, q):
+    await q.edit_message_text(ui.INBOUND_WELCOME,
+                              reply_markup=ui.inbound_menu(), parse_mode="HTML")
+
+
+async def get_panel_client(p):
+    client = PanelClient(p["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
+    if not client.login():
+        raise XUIError(f"ورود به پنل {p['name']} شکست خورد — URL یا پسورد چک کن")
+    return client
+
+
+async def handle_inbound_callback(update, ctx, q, data: str):
+    uid = update.effective_user.id
+    deployed = [p for p in (ctx.user_data.get("deployed_panels") or []) if p.get("url")]
+
+    if data in ("inb_create_pick", "inb_list_pick", "inb_delete_pick"):
+        if not deployed:
+            await q.edit_message_text(ui.LINKS_EMPTY, parse_mode="HTML")
+            return
+        prefix = data.split("_")[0]  # inb
+        action = data.split("_", 1)[1].split("_")[0]  # create / list / delete
+        title = {"create": "انتخاب پنل برای ساخت اینباند ➕",
+                 "list": "لیست اینباندهای کدوم پنل؟ 📋",
+                 "delete": "حذف اینباند از کدوم پنل؟ 🗍"}[action]
+        await q.edit_message_text(
+            f"{ui.header(title)}",
+            reply_markup=_pick_panel_keyboard(deployed, f"inbdo_{action}"),
+            parse_mode="HTML")
+        return
+
+    if data.startswith("inbdo_create:"):
+        _, sid, name, url = data.split(":", 3)
+        status = await q.message.reply_text(
+            ui.header(f"📥 ساخت اینباند روی {name}..."), parse_mode="HTML")
+        p = {"name": name, "service_id": sid, "url": url}
+
+        def _work():
+            import uuid as _u
+            client = PanelClient(url, config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not client.login():
+                raise XUIError("ورود به پنل ناموفق")
+            u = str(_u.uuid4())
+            res = client.create_vless_tls_inbound(
+                uuid=u, email=f"{name.lower()}-user",
+                domain=url.replace("https://", "").rstrip("/"),
+                port=config.INBOUND_PORT, path=config.INBOUND_PATH)
+            if not res.get("success"):
+                raise XUIError(res.get("msg", "unknown"))
+            link = build_vless_link(url, u, config.INBOUND_PATH, f"Hermes-{name}")
+            return link
+
+        try:
+            link = await run_blocking(_work)
+            await say(status,
+                      f"{ui.header('اینباند ساخته شد ✅')}\n\n"
+                      f"📡 <b>{name}</b> · 🔌 {config.INBOUND_PORT} · 🛣 {config.INBOUND_PATH}\n\n"
+                      f"<code>{link}</code>\n\n"
+                      "📲 کپی کن → v2rayNG → Import")
+        except (XUIError, Exception) as e:
+            await say(status, f"{ui.header('خطا ⛔️')}\n\n❌ {e}")
+        return
+
+    if data.startswith("inbdo_list:") or data.startswith("inbdo_delete:"):
+        _, action2, sid, name, url = data.split(":", 4)
+        status = await q.message.reply_text(ui.header("در حال خواندن... ⏳"), parse_mode="HTML")
+
+        def _work():
+            client = PanelClient(url, config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not client.login():
+                raise XUIError("ورود ناموفق")
+            return client.list_inbounds()
+
+        try:
+            inbounds = await run_blocking(_work)
+            lines = []
+            for ib in inbounds[:15]:
+                port = ib.get("port", "?")
+                remark = ib.get("remark", "?")
+                iid = ib.get("id")
+                icon = "🗑" if action2 == "delete" else "📥"
+                cb = f"inbdel:{sid}:{name}:{url}:{iid}" if action2 == "delete" else "noop"
+                lines.append((f'{icon} <b>{remark}</b> :{port}', cb))
+            if not lines:
+                await say(status, ui.header("اینباندی نیست 📭"))
+                return
+            from telegram import InlineKeyboardButton as IB, InlineKeyboardMarkup as IKM
+            rows = [[IB(txt, callback_data=cb)] for txt, cb in lines]
+            rows.append([IB("🔙 بازگشت", callback_data="sec_inbound")])
+            await q.message.edit_text(
+                f"{ui.header(f'اینباندهای {name} 📋')}\n\n"
+                + ("برای حذف رویش بزن:" if action2 == "delete" else ""),
+                reply_markup=IKM(rows), parse_mode="HTML")
+        except (XUIError, Exception) as e:
+            await say(status, f"{ui.header('خطا ⛔️')}\n\n❌ {e}")
+        return
+
+    if data.startswith("inbdel:"):
+        _, sid, name, url, iid = data.split(":", 4)
+
+        def _work():
+            client = PanelClient(url, config.XUI_USERNAME, config.XUI_PASSWORD)
+            if not client.login():
+                raise XUIError("ورود ناموفق")
+            r = client.delete_inbound(int(iid))
+            if not r.get("success"):
+                raise XUIError(r.get("msg", "حذف ناموفق"))
+            return True
+
+        try:
+            await run_blocking(_work)
+            await q.edit_message_text(f"{ui.header('حذف شد ✅')}\n\n🗑 اینباند <code>{iid}</code>", parse_mode="HTML")
+        except Exception as e:
+            await q.edit_message_text(f"{ui.header('خطا ⛔️')}\n\n❌ {e}", parse_mode="HTML")
+        return
+
+
+
+# ════════════════════════════════════════════════════════════════
 #  TCP PROXY FEATURE
 # ════════════════════════════════════════════════════════════════
 async def tcp_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -348,7 +637,9 @@ async def tcp_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     u = ctx.user_data.get(uid) or {}
-    if u.pop("await_domain", None):
+    cleared = (u.pop("await_domain", None) or u.pop("await_acc_label", None)
+               or u.pop("pending_acc_label", None) or u.pop("await_domain_for", None))
+    if cleared:
         await update.message.reply_text(f"{ui.header('لغو شد ❌')}", parse_mode="HTML")
     else:
         stop = ctx.bot_data.get(f"tcpstop_{uid}")
@@ -360,9 +651,48 @@ async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Handle plain text input (e.g. adding a suggested domain)."""
+    """Handle plain text input: suggested domains, account labels/tokens, custom domains."""
     uid = update.effective_user.id
     u = ctx.user_data.get(uid) or {}
+
+    # ── account add: step 1 label, step 2 token ──
+    if u.get("await_acc_label"):
+        u.pop("await_acc_label")
+        u["pending_acc_label"] = update.message.text.strip()[:32]
+        await update.message.reply_text(
+            ui.header(f"اکانت <code>{u['pending_acc_label']}</code> ➕") +
+            "\n\n🔑 حالا <b>توکن Railway</b> این اکانت رو بفرست:\n"
+            "(dashboard.railway.com → Tokens)\n\nلغو: /cancel",
+            parse_mode="HTML")
+        return
+
+    if "pending_acc_label" in u:
+        label = u.pop("pending_acc_label")
+        token = update.message.text.strip()
+        status = await update.message.reply_text(ui.header("در حال بررسی... 🔍"), parse_mode="HTML")
+        try:
+            ws_id, email = await run_blocking(RailwayAPI(token).whoami)
+            ok = ACCOUNTS.add(uid, label, token, email)
+            if not ok:
+                await say(status, f"{ui.header('تکراری ⚠️')}\n\nاسم <code>{label}</code> قبلاً هست.")
+                return
+            ACCOUNTS.set_active(uid, label)
+            refresh_active(ctx, uid)
+            accounts = ACCOUNTS.list(uid)
+            await say(status,
+                      f"{ui.header('اکانت اضافه شد ✅')}\n\n👤 {label} · <code>{email}</code>",
+                      keyboard=ui.accounts_keyboard(accounts))
+        except RailwayError as e:
+            await say(status, ui.TOKEN_INVALID + f"\n\n<code>{e}</code>")
+        return
+
+    # ── custom domain set ──
+    if "await_domain_for" in u:
+        info = u.pop("await_domain_for")
+        await apply_custom_domain(update, ctx, info["service_id"], info["name"],
+                                  update.message.text)
+        return
+
     if u.pop("await_domain", None):
         d = update.message.text.strip()
         added = TCP.add_domain(d)
@@ -381,7 +711,7 @@ async def show_tcp_menu(q):
 
 async def run_tcp_rotation_for_panel(update, ctx, status_msg, p, env_id, uid):
     """Rotate `count` proxies for one panel; returns list of results."""
-    token = ctx.user_data["railway_token"]
+    token = active_token(ctx)
     s = TCP.get_user(uid)
     count = int(s.get("count", 2))
     port = int(s.get("port", 443))
@@ -456,8 +786,8 @@ async def start_tcp_flow(update, ctx, q):
                 await q.edit_message_text(ui.LINKS_EMPTY, parse_mode="HTML")
                 return
             proj = projects[0]
-            env_id = await run_blocking(TCPProxyAPI(ctx.user_data["railway_token"]).find_env, proj["id"])
-            services = await run_blocking(TCPProxyAPI(ctx.user_data["railway_token"]).list_services, proj["id"])
+            env_id = await run_blocking(TCPProxyAPI(active_token(ctx)).find_env, proj["id"])
+            services = await run_blocking(TCPProxyAPI(active_token(ctx)).list_services, proj["id"])
             ctx.user_data["tcp_project_id"] = proj["id"]
             ctx.user_data["tcp_env_id"] = env_id
             deployed = [{"name": s["name"], "service_id": s["id"], "url": ""}
@@ -553,7 +883,7 @@ async def handle_tcp_callback(update, ctx, q, data: str):
         if not env_id:
             api = get_api(ctx)
             pid = ctx.user_data.get("tcp_project_id")
-            env_id = await run_blocking(api and TCPProxyAPI(ctx.user_data["railway_token"]).find_env, pid or "")
+            env_id = await run_blocking(api and TCPProxyAPI(active_token(ctx)).find_env, pid or "")
         panel = {"name": name, "service_id": sid}
         status = await q.message.reply_text(
             f"{ui.header(f'شروع چرخش {name} 🛰')}", parse_mode="HTML")

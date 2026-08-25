@@ -112,6 +112,13 @@ class PanelClient:
         }
         return self._req("POST", "/panel/api/inbounds/add", data)
 
+    def list_inbounds(self) -> list[dict]:
+        d = self._req("GET", "/panel/api/inbounds/list")
+        return d.get("obj", []) or []
+
+    def delete_inbound(self, inbound_id: int) -> dict:
+        return self._req("POST", f"/panel/api/inbounds/del/{inbound_id}")
+
 
 # ── helpers ────────────────────────────────────────────────────
 def build_vless_link(domain: str, uuid: str, path: str = "/cdn", name: str = "config") -> str:
