@@ -41,9 +41,10 @@ WELCOME = (
 MENU = InlineKeyboardMarkup([
     [InlineKeyboardButton("🚀 دپلوی جدید", callback_data="go_deploy"),
      InlineKeyboardButton("🔗 لینک اتصال", callback_data="go_link")],
-    [InlineKeyboardButton("📊 وضعیت", callback_data="go_status"),
-     InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help")],
-    [InlineKeyboardButton("🗑 حذف پروژه", callback_data="go_delete")],
+    [InlineKeyboardButton("🛰 TCP Proxy", callback_data="go_tcp"),
+     InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
+    [InlineKeyboardButton("ℹ️ راهنما", callback_data="go_help"),
+     InlineKeyboardButton("🗑 حذف پروژه", callback_data="go_delete")],
 ])
 
 HELP_TEXT = (
@@ -164,3 +165,76 @@ LINKS_EMPTY = (
     f"{header('چیزی برای نشون دادن نیست 📭')}\n\n"
     "هنوز پنلی دپلوی نشده.\nاول بزن: 🚀 <code>/deploy</code>"
 )
+
+# ── TCP Proxy section ──────────────────────────────────────────
+def tcp_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛰 چرخش TCP Proxy", callback_data="tcp_start")],
+        [InlineKeyboardButton("📋 لیست پیشنهادی", callback_data="tcp_domains"),
+         InlineKeyboardButton("⚙️ تنظیمات من", callback_data="tcp_settings")],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
+    ])
+
+
+TCP_WELCOME = (
+    f"{header('TCP Proxy Manager 🛰')}\n\n"
+    "برای هر پنل می‌تونی چند TCP Proxy بچرخونی:\n\n"
+    "🎯 <b>هدف:</b> رسیدن به دامنه‌های خوش‌اسم (monorail, nozomi...)\n"
+    "🔢 <b>تعداد:</b> هر پنل چند پروکسی همزمان\n"
+    "🔌 <b>پورت:</b> پورت اپلیکیشن هر پروکسی\n"
+    "📋 <b>لیست پیشنهادی:</b> قابل ویرایش از داخل ربات\n\n"
+    f"{SEP}\n👇 انتخاب کن:"
+)
+
+
+def settings_text(uid_settings: dict) -> str:
+    count = uid_settings.get("count", 2)
+    port = uid_settings.get("port", 443)
+    mode = "🔀 دامنه‌های تأیید" if uid_settings.get("mode", "good") == "good" else "🎲 رندم"
+    return (
+        f"{header('تنظیمات TCP Proxy ⚙️')}\n\n"
+        f"🔢 تعداد پروکسی برای هر پنل: <b>{count}</b>\n"
+        f"🔌 پورت اپلیکیشن: <b>{port}</b>\n"
+        f"🎯 حالت چرخش: {mode}\n\n"
+        f"{SEP}\n👇 تغییر بده:"
+    )
+
+
+def settings_keyboard(s: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1️⃣", callback_data="tcpset_count:1"),
+         InlineKeyboardButton("2️⃣", callback_data="tcpset_count:2"),
+         InlineKeyboardButton("3️⃣", callback_data="tcpset_count:3"),
+         InlineKeyboardButton("4️⃣", callback_data="tcpset_count:4")],
+        [InlineKeyboardButton("🔌 پورت: 443", callback_data="tcpset_port:443"),
+         InlineKeyboardButton("8080", callback_data="tcpset_port:8080"),
+         InlineKeyboardButton("2053", callback_data="tcpset_port:2053")],
+        [InlineKeyboardButton(("✅" if s.get("mode", "good") == "good" else "") + " 🔀 تأیید",
+                              callback_data="tcpset_mode:good"),
+         InlineKeyboardButton(("✅" if s.get("mode") == "rnd" else "") + " 🎲 رندم",
+                              callback_data="tcpset_mode:rnd")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="tcp_back")],
+    ])
+
+
+def domains_text(domains: list[str]) -> str:
+    body = "\n".join(f"  {i}. <code>{d}</code>" for i, d in enumerate(domains, 1))
+    return (
+        f"{header('لیست دامنه‌های پیشنهادی 📋')}\n\n"
+        f"{body or '  (خالی)'}\n\n{SEP}\n"
+        f"📊 مجموعه: <b>{len(domains)}</b> دامنه"
+    )
+
+
+def domains_keyboard(domains: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    # one remove button per domain (max 12)
+    for i, d in enumerate(domains[:12]):
+        short = d.replace(".proxy.rlwy.net", "")
+        rows.append([InlineKeyboardButton(f"🗑 {short}", callback_data=f"tcpdel:{d}"),
+                     InlineKeyboardButton(f"↩️ بازگردانی", callback_data="tcpreset")])
+    rows.append([InlineKeyboardButton("➕ افزودن دامنه", callback_data="tcpadd_hint")])
+    rows.append([InlineKeyboardButton("🔄 بازنشانی به پیش‌فرض", callback_data="tcpreset_all")])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="tcp_back")])
+    return InlineKeyboardMarkup(rows)
+

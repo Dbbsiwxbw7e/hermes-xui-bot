@@ -23,6 +23,11 @@ import config
 import ui
 from railway_api import RailwayAPI, RailwayError
 from xui_api import PanelClient, XUIError, build_vless_link, wait_until_ready
+from tcp_api import TCPProxyAPI, normalize_domains
+from tcp_state import TCPState
+
+# shared persistent state for TCP feature (domains list + per-user settings)
+TCP = TCPState()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -303,6 +308,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "go_link":
         await hint("برای ساخت لینک اتصال بزن:\n🔗 <code>/link</code>")
         return
+    if data == "go_tcp":
+        await show_tcp_menu(q)
+        return
     if data == "go_status":
         await hint("برای دیدن وضعیت بزن:\n📊 <code>/status</code>")
         return
@@ -322,6 +330,240 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     handler = route.get(data)
     if handler:
         await handler()
+        return
+
+    # ── TCP Proxy callbacks ──
+    await handle_tcp_callback(update, ctx, q, data)
+
+
+# ════════════════════════════════════════════════════════════════
+#  TCP PROXY FEATURE
+# ════════════════════════════════════════════════════════════════
+async def tcp_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Entry: /tcp command"""
+    await update.message.reply_text(ui.TCP_WELCOME, reply_markup=ui.tcp_menu(),
+                                    parse_mode="HTML")
+
+
+async def cancel_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    u = ctx.user_data.get(uid) or {}
+    if u.pop("await_domain", None):
+        await update.message.reply_text(f"{ui.header('لغو شد ❌')}", parse_mode="HTML")
+    else:
+        stop = ctx.bot_data.get(f"tcpstop_{uid}")
+        if stop:
+            stop["kill"] = True
+            await update.message.reply_text("🛑 در حال توقف چرخش...", parse_mode="HTML")
+        else:
+            await update.message.reply_text("چیزی برای لغو نبود.", parse_mode="HTML")
+
+
+async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle plain text input (e.g. adding a suggested domain)."""
+    uid = update.effective_user.id
+    u = ctx.user_data.get(uid) or {}
+    if u.pop("await_domain", None):
+        d = update.message.text.strip()
+        added = TCP.add_domain(d)
+        domains = TCP.get_domains()
+        msg = f"✅ <code>{d}</code> اضافه شد!" if added else f"⚠️ <code>{d}</code> قبلاً هست."
+        await update.message.reply_text(
+            f"{ui.header('لیست دامنه‌ها 📋')}\n\n{msg}\n{ui.SEP}\n"
+            + "\n".join(f"  {i}. <code>{x}</code>" for i, x in enumerate(domains, 1)),
+            reply_markup=ui.domains_keyboard(domains), parse_mode="HTML")
+
+
+async def show_tcp_menu(q):
+    await q.edit_message_text(ui.TCP_WELCOME, reply_markup=ui.tcp_menu(),
+                              parse_mode="HTML")
+
+
+async def run_tcp_rotation_for_panel(update, ctx, status_msg, p, env_id, uid):
+    """Rotate `count` proxies for one panel; returns list of results."""
+    token = ctx.user_data["railway_token"]
+    s = TCP.get_user(uid)
+    count = int(s.get("count", 2))
+    port = int(s.get("port", 443))
+    mode = s.get("mode", "good")
+    targets = TCP.target_set() if mode == "good" else None
+    api = TCPProxyAPI(token)
+
+    stop = {"kill": False}
+    ctx.bot_data[f"tcpstop_{uid}"] = stop
+    results = []
+    cancel_kbd = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🛑 توقف", callback_data="tcp_stop")]])
+
+    for i in range(1, count + 1):
+        lines = []
+
+        def on_progress(m):
+            lines.append(m)
+
+        await say(status_msg,
+                  ui.header(f'🛰 چرخش {p["name"]} — پروکسی {i}/{count}')
+                  + f"\n\n<pre>{html_escape(chr(10).join(lines[-6:]) or 'شروع...')}</pre>"
+                  + f"\n\n🎯 حالت: {'🔀 تأیید' if mode=='good' else '🎲 رندم'} · 🔌 پورت {port}",
+                  keyboard=cancel_kbd)
+
+        def work():
+            return api.rotate(p["service_id"], env_id, port,
+                              targets=targets, max_tries=30, cooldown=8,
+                              on_progress=on_progress,
+                              cancel_check=lambda: stop["kill"])
+
+        try:
+            res = await asyncio.wait_for(run_blocking(work), timeout=900)
+        except Exception as e:
+            res = None
+            lines.append(f"خطا: {e}")
+
+        if res:
+            dom, prt = res
+            results.append((p["name"], f"{dom}:{prt}"))
+            await say(status_msg,
+                      ui.header(f"✅ {p['name']} — {i}/{count}")
+                      + f"\n\n🎯 <code>{dom}:{prt}</code>")
+        else:
+            if stop.get("kill"):
+                break
+            results.append((p["name"], "❌ به هدف نرسید"))
+
+    ctx.bot_data.pop(f"tcpstop_{uid}", None)
+    return results
+
+
+def html_escape(t: str) -> str:
+    import html as _h
+    return _h.escape(str(t))
+
+
+async def start_tcp_flow(update, ctx, q):
+    """Pick a deployed panel → rotate its TCP proxies."""
+    uid = update.effective_user.id
+    deployed = ctx.user_data.get("deployed_panels") or []
+    if not deployed:
+        # try to rediscover from the latest project
+        api = get_api(ctx)
+        if not api:
+            await q.edit_message_text(ui.NOT_CONNECTED, parse_mode="HTML")
+            return
+        try:
+            projects = sorted(await run_blocking(api.list_projects),
+                              key=lambda x: x.get("createdAt", ""), reverse=True)
+            if not projects:
+                await q.edit_message_text(ui.LINKS_EMPTY, parse_mode="HTML")
+                return
+            proj = projects[0]
+            env_id = await run_blocking(TCPProxyAPI(ctx.user_data["railway_token"]).find_env, proj["id"])
+            services = await run_blocking(TCPProxyAPI(ctx.user_data["railway_token"]).list_services, proj["id"])
+            ctx.user_data["tcp_project_id"] = proj["id"]
+            ctx.user_data["tcp_env_id"] = env_id
+            deployed = [{"name": s["name"], "service_id": s["id"], "url": ""}
+                        for s in services]
+        except Exception as e:
+            await q.edit_message_text(f"{ui.header('خطا ⛔️')}\n\n❌ {e}", parse_mode="HTML")
+            return
+
+    rows = [[InlineKeyboardButton(p["name"], callback_data=f"tcpsvc:{p['service_id']}:{p['name']}")]
+            for p in deployed]
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="tcp_back")])
+    await q.edit_message_text(
+        f"{ui.header('انتخاب پنل 🛰')}\n\nکدوم پنل؟ (چندتایی میشه انتخاب کرد — هر بار یکی)",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+
+async def handle_tcp_callback(update, ctx, q, data: str):
+    uid = update.effective_user.id
+
+    if data == "tcp_back":
+        await show_tcp_menu(q)
+        return
+
+    if data == "tcp_start":
+        await start_tcp_flow(update, ctx, q)
+        return
+
+    if data == "tcp_settings":
+        s = TCP.get_user(uid)
+        await q.edit_message_text(ui.settings_text(s),
+                                  reply_markup=ui.settings_keyboard(s),
+                                  parse_mode="HTML")
+        return
+
+    if data.startswith("tcpset_"):
+        kind, _, val = data.partition(":")
+        field = {"tcpset_count": "count", "tcpset_port": "port",
+                 "tcpset_mode": "mode"}[kind]
+        TCP.set_user(uid, **{field: int(val) if field != "mode" else val})
+        s = TCP.get_user(uid)
+        await q.edit_message_text(ui.settings_text(s),
+                                  reply_markup=ui.settings_keyboard(s),
+                                  parse_mode="HTML")
+        return
+
+    if data == "tcp_domains":
+        domains = TCP.get_domains()
+        await q.edit_message_text(ui.domains_text(domains),
+                                  reply_markup=ui.domains_keyboard(domains),
+                                  parse_mode="HTML")
+        return
+
+    if data.startswith("tcpdel:"):
+        d = data.split(":", 1)[1]
+        TCP.remove_domain(d)
+        domains = TCP.get_domains()
+        await q.edit_message_text(ui.domains_text(domains),
+                                  reply_markup=ui.domains_keyboard(domains),
+                                  parse_mode="HTML")
+        return
+
+    if data in ("tcpreset_all", "tcpreset"):
+        if data == "tcpreset_all":
+            TCP.reset_domains()
+        domains = TCP.get_domains()
+        await q.edit_message_text(ui.domains_text(domains),
+                                  reply_markup=ui.domains_keyboard(domains),
+                                  parse_mode="HTML")
+        return
+
+    if data == "tcpadd_hint":
+        ctx.user_data.setdefault(uid, {})["await_domain"] = True
+        await q.edit_message_text(
+            f"{ui.header('افزودن دامنه ➕')}\n\n"
+            "اسم دامنه رو بفرست (فقط اسم کافیه):\n\n"
+            "<code>monorail</code>\nیا کامل:\n<code>monorail.proxy.rlwy.net</code>\n\n"
+            "برای لغو: /cancel",
+            parse_mode="HTML")
+        return
+
+    if data == "tcp_stop":
+        stop = ctx.bot_data.get(f"tcpstop_{uid}")
+        if stop:
+            stop["kill"] = True
+            await q.answer("در حال توقف... 🛑")
+        else:
+            await q.answer("چرخشی در جریان نیست", show_alert=True)
+        return
+
+    if data.startswith("tcpsvc:"):
+        _, sid, name = data.split(":", 2)
+        env_id = ctx.user_data.get("tcp_env_id") or ""
+        if not env_id:
+            api = get_api(ctx)
+            pid = ctx.user_data.get("tcp_project_id")
+            env_id = await run_blocking(api and TCPProxyAPI(ctx.user_data["railway_token"]).find_env, pid or "")
+        panel = {"name": name, "service_id": sid}
+        status = await q.message.reply_text(
+            f"{ui.header(f'شروع چرخش {name} 🛰')}", parse_mode="HTML")
+        results = await run_tcp_rotation_for_panel(update, ctx, status, panel,
+                                                   env_id, uid)
+        summary = "\n".join(f"{'✅' if '❌' not in r else '❌'} <b>{n}</b> → <code>{v}</code>"
+                            for n, v in results)
+        await say(status,
+                  f"{ui.header('نتیجه چرخش TCP 🛰')}\n{ui.SEP}\n{summary}\n\n{ui.BOT}\n"
+                  "برای پنل دیگه: 🛰 /tcp")
 
 
 # ── main ───────────────────────────────────────────────────────
@@ -332,6 +574,9 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_start))
+    app.add_handler(CommandHandler("tcp", tcp_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CommandHandler("connect", cmd_connect))
     app.add_handler(CommandHandler("deploy", cmd_deploy))
     app.add_handler(CommandHandler("link", cmd_link))
