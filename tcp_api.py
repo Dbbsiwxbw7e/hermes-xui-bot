@@ -7,7 +7,7 @@ import socket
 import time
 import urllib.request
 
-RAILWAY_URL = "https://backboard.railway.com/graphql/v2"
+RAILWAY_URL = "https://api.railway.app/graphql/v2"
 
 DEFAULT_GOOD_DOMAINS = (
     "monorail,nozomi,turntable,trolley,reseau,autorack,metro,hopper,"
@@ -39,6 +39,8 @@ class TCPProxyAPI:
         req = urllib.request.Request(RAILWAY_URL, data=body, headers={
             "Authorization": "Bearer " + self.token,
             "Content-Type": "application/json",
+            "User-Agent": "railway-cli/5.30.4",
+            "Accept": "*/*",
         })
         with urllib.request.urlopen(req, timeout=30) as r:
             resp = json.loads(r.read().decode())
@@ -50,7 +52,7 @@ class TCPProxyAPI:
     def list_proxies(self, service_id: str, env_id: str) -> list[dict]:
         q = ('query($e: String!, $s: String!) { tcpProxies(environmentId: $e, serviceId: $s) '
              '{ id domain proxyPort applicationPort syncStatus } }')
-        return self._gql(q, {"e": env_id, "s": service_id}).get("tcpProxies", [])
+        return self._gql(q, {"e": env_id, "s": service_id}).get("tcpProxies") or []
 
     def create_proxy(self, service_id: str, env_id: str, app_port: int) -> dict:
         r = self._gql(
@@ -75,11 +77,13 @@ class TCPProxyAPI:
                 return e.get("id")
         return envs[0].get("id") if envs else None
 
-    def list_services(self, project_id: str) -> list[dict]:
-        edges = self._gql(
+    def list_services(self, service_id_or_project: str) -> list[dict]:
+        """Accepts a PROJECT id. (Passing a service id returns null → error.)"""
+        d = self._gql(
             'query($id: String!){ project(id: $id) '
             '{ services(first: 20) { edges { node { id name } } } } }',
-            {"id": project_id}).get("project", {}).get("services", {}).get("edges", [])
+            {"id": service_id_or_project})
+        edges = ((d.get("project") or {}).get("services") or {}).get("edges", [])
         return [e["node"] for e in edges]
 
     # ── helpers ────────────────────────────────────────────────
