@@ -310,24 +310,24 @@ DOMAIN_SET_HINT = (
 # ── Section: deploy ────────────────────────────────────────────
 def deploy_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 دپلوی جدید (همه پنل‌ها)", callback_data="go_deploy")],
-        [InlineKeyboardButton("🌐 ست کردن دامنه", callback_data="dep_domain_hint"),
-         InlineKeyboardButton("🎲 دامنه رندوم برای همه", callback_data="dep_random_domains")],
-        [InlineKeyboardButton("🔗 اتصال نودها", callback_data="dep_nodes")],
-        [InlineKeyboardButton("🗑 حذف پنل/پروژه", callback_data="go_delete")],
-        [InlineKeyboardButton("📊 وضعیت", callback_data="go_status")],
+        [InlineKeyboardButton("🚀 دپلوی همه پنل‌ها (فلو کامل)", callback_data="go_deploy")],
         [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")],
     ])
 
+STAGE2_PROMPT = (
+    "✅ پنل‌ها دپلوی شدن!\n\n"
+    "⏸ حالا نوبت توئه:\n"
+    "وارد هر پنل شو و ریجن موردنظرت رو توی تنظیمات پنل ست کن:\n\n"
+)
+
 DEPLOY_WELCOME = (
     f"{header('بخش دپلوی 🚀')}\n\n"
-    "🚀 <b>دپلوی جدید</b> — ساخت همه پنل‌ها + اتصال خودکار نودها\n"
-    "🌐 <b>ست کردن دامنه</b> — دامنه دلخواهت رو به پنل وصل کن\n"
-    "🎲 <b>دامنه رندوم</b> — برای همه پنل‌ها یهجا دامنه تازه بسازه\n"
-    "🔗 <b>اتصال نودها</b> — وصل کردن دستی پنل‌ها به پنل اصلی\n"
-    "🗑 <b>حذف</b> — پنل یا کل پروژه رو پاک کن\n"
-    "📊 <b>وضعیت</b> — لیست زنده پروژه‌ها\n\n"
-    f"{SEP}\n👇 انتخاب کن:"
+    "فلو کامل ۴ مرحله‌ای:\n\n"
+    "1️⃣ 📦 دپلوی ۴ پنل + انتظار SUCCESS\n"
+    "2️⃣ ⏸ مکث — تو ریجن‌ها رو توی پنل‌ها تنظیم می‌کنی\n"
+    "3️⃣ 🌐 ست خودکار دامنه‌های جدید (پورت 3000)\n"
+    "4️⃣ 🔗 اتصال همه نودها به پنل اصلی\n\n"
+    f"{SEP}\n👇 بزن تا شروع شه:"
 )
 
 # ── Section: inbounds ──────────────────────────────────────────

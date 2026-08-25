@@ -209,50 +209,20 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await say(status, ui.deploy_report(lines, ok == len(provisioned), ok,
                                        len(provisioned)))
 
-    # 4) auto-link nodes to the main panel (best-effort, non-blocking failures)
-    if config.AUTO_LINK_NODES and ok >= 2:
-        await say(status,
-                  f"{ui.header('🔗 اتصال خودکار نودها...')}\n\n"
-                  "پنل‌های آماده به پنل اصلی وصل میشن...")
-        link_lines = []
-        main = next((p for p in provisioned if p["name"] == config.MAIN_PANEL), None)
-        others = [p for p in provisioned if p.get("ready") and p.get("url")
-                  and p["name"] != (main or {}).get("name")]
-
-        async def link_one(p):
-            def _work():
-                mp = PanelClient(main["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
-                if not mp.login():
-                    raise XUIError("ورود به پنل اصلی ناموفق")
-                np = PanelClient(p["url"], config.XUI_USERNAME, config.XUI_PASSWORD)
-                if not np.login():
-                    raise XUIError(f"ورود به {p['name']} ناموفق")
-                nuuid = np.get_uuid()
-                ntoken = np.create_api_token()
-                res = mp.add_node(p["name"], p["url"], nuuid, ntoken)
-                if not res.get("success"):
-                    raise XUIError(res.get("msg", "ناموفق"))
-                return True
-            try:
-                await run_blocking(_work)
-                link_lines.append(f"✅ <b>{p['name']}</b> → متصل به {config.MAIN_PANEL}")
-            except Exception as e:
-                link_lines.append(f"⚠️ <b>{p['name']}</b> → {str(e)[:60]}")
-            await say(status,
-                      f"{ui.header('🔗 اتصال نودها...')}\n{ui.SEP}\n"
-                      + "\n".join(link_lines))
-
-        for p in others:
-            await link_one(p)
-
-        summary = "\n".join(link_lines) or "(پنل دیگه‌ای برای اتصال نبود)"
-        await say(status,
-                  f"{ui.header('نتیجه اتصال نودها 🔗')}\n{ui.SEP}\n{summary}\n\n"
-                  f"🏠 نود اصلی: <b>{config.MAIN_PANEL}</b>")
-
-
-@require_token
-async def cmd_link(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # ── STAGE 2: pause & ask user to set regions in the panels ──
+    panel_list = "\n".join(
+        f"  🌐 <code>{p['url'].replace('https://','')}/managepanel/</code>"
+        for p in provisioned if p.get("url"))
+    stage2_kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ ست کردم — ادامه (دامنه‌ها)", callback_data="flow_stage3")],
+        [InlineKeyboardButton("⏭ رد شو — مستقیم دامنه‌ها", callback_data="flow_stage3")]])
+    await say(status,
+              ui.header("مرحله ۲/۴ — تنظیم ریجن‌ها ⏸")
+              + f"\n{ui.SEP}\n"
+              + ui.STAGE2_PROMPT
+              + panel_list
+              + f"\n\n{ui.BOT}\n👇 وقتی تموم شد دکمه رو بزن:",
+              keyboard=stage2_kb)
     api = get_api(ctx)
     deployed = ctx.user_data.get("deployed_panels", [])
     if not deployed:
@@ -416,6 +386,12 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         refresh_active(ctx, update.effective_user.id)
         await random_domains_all(update, ctx)
         return
+    if data == "flow_stage3":
+        await flow_stage3(update, ctx)
+        return
+    if data == "flow_stage4":
+        await flow_stage4(update, ctx)
+        return
     if data.startswith("inb"):
         await handle_inbound_callback(update, ctx, q, data)
         return
@@ -535,6 +511,89 @@ async def link_nodes_flow(update, ctx):
               + "\n".join(lines)
               + f"\n\n🏠 نود اصلی: <b>{config.MAIN_PANEL}</b>")
 
+
+
+
+async def flow_stage3(update, ctx):
+    """Stage 3: set fresh random domains (port 3000) for all panels."""
+    uid = update.effective_user.id
+    refresh_active(ctx, uid)
+    api = get_api(ctx)
+    if not api:
+        origin = update.callback_query.message if update.callback_query else update.message
+        await origin.reply_text(ui.NOT_CONNECTED, parse_mode="HTML")
+        return
+
+    q = update.callback_query
+    deployed = ctx.user_data.get("deployed_panels") or []
+    if not deployed:
+        # rediscover from newest project
+        try:
+            projects = sorted(await run_blocking(api.list_projects),
+                              key=lambda x: x.get("createdAt", ""), reverse=True)
+            proj = projects[0]
+            envs = await run_blocking(api.get_environments, proj["id"])
+            env_id = envs[0]["id"] if envs else ""
+            tcp = TCPProxyAPI(active_token(ctx))
+            services = await run_blocking(tcp.list_services, proj["id"])
+            deployed = [{"name": s["name"], "service_id": s["id"], "url": ""}
+                        for s in services]
+        except Exception as e:
+            await q.edit_message_text(f"{ui.header('خطا ⛔️')}\n\n❌ {e}", parse_mode="HTML")
+            return
+        ctx.user_data["deployed_panels"] = deployed
+
+    status_msg = q.message
+    lines = []
+    ok_count = 0
+
+    async def make(p):
+        nonlocal ok_count
+        if not p.get("service_id"):
+            return
+        try:
+            # find env each time is wasteful; fetch once outside via closure below
+            domain = await run_blocking(api.create_domain, p["service_id"],
+                                        ctx.user_data.get("_env_id", ""), 3000)
+            if domain:
+                ok_count += 1
+                p["url"] = f"https://{domain}"
+                lines.append(f"✅ <b>{p['name']}</b> → <code>{domain}</code>")
+            else:
+                lines.append(f"⚠️ <b>{p['name']}</b> → دامنه برگشت نخورد")
+        except Exception as e:
+            lines.append(f"❌ <b>{p['name']}</b> → {str(e)[:50]}")
+        await say(status_msg,
+                  ui.header(f"مرحله ۳/۴ — ست دامنه‌ها ({ok_count}/{len(deployed)}) 🌐")
+                  + f"\n{ui.SEP}\n" + "\n".join(lines))
+
+    # get env once
+    try:
+        pid = ctx.user_data.get("tcp_project_id")
+        if pid:
+            envs = await run_blocking(api.get_environments, pid)
+            if envs:
+                ctx.user_data["_env_id"] = envs[0]["id"]
+    except Exception:
+        pass
+
+    await asyncio.gather(*(make(p) for p in deployed))
+
+    # ── STAGE 4 prompt ──
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔗 اتصال نودها — شروع", callback_data="flow_stage4")],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="refresh_menu")]])
+    await say(status_msg,
+              ui.header(f"مرحله ۳/۴ تمام شد ✅ ({ok_count}/{len(deployed)})")
+              + f"\n{ui.SEP}\n" + "\n".join(lines)
+              + f"\n\n{ui.BOT}\n👇 مرحله آخر: اتصال نودها",
+              keyboard=kb)
+
+
+async def flow_stage4(update, ctx):
+    """Stage 4: link all panels as nodes to MAIN panel."""
+    refresh_active(ctx, update.effective_user.id)
+    await link_nodes_flow(update, ctx)
 
 
 async def show_proxy_section(update, ctx, q):
