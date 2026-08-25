@@ -208,7 +208,8 @@ def settings_text(uid_settings: dict) -> str:
     return (
         f"{header('تنظیمات TCP Proxy ⚙️')}\n\n"
         f"🔢 تعداد پروکسی برای هر پنل: <b>{count}</b>\n"
-        f"🔌 پورت اپلیکیشن: <b>{port}</b>\n"
+        f"🔌 پورت شروع: <b>{port}</b> (هر پروکسی بعدی +۱)\n"
+        "     └ ⚠️ هر TCP باید پورت یکتا داشته باشه — خودکار مدیریت میشه\n"
         f"🎯 حالت چرخش: {mode}\n\n"
         f"{SEP}\n👇 تغییر بده:"
     )

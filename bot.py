@@ -777,6 +777,20 @@ async def run_tcp_rotation_for_panel(update, ctx, status_msg, p, env_id, uid):
     targets = TCP.target_set() if mode == "good" else None
     api = TCPProxyAPI(token)
 
+    # ⚠️ Railway rule: each TCP proxy needs a UNIQUE application port per service.
+    # Collect ports already in use, assign base_port, +1, +2, ... skipping used ones.
+    try:
+        existing = await run_blocking(api.list_proxies, p["service_id"], env_id)
+    except Exception:
+        existing = []
+    used = {pr.get("applicationPort") for pr in existing if pr.get("applicationPort")}
+    assigned_ports = []
+    candidate = port
+    while len(assigned_ports) < count:
+        if candidate not in used:
+            assigned_ports.append(candidate)
+        candidate += 1
+
     stop = {"kill": False}
     ctx.bot_data[f"tcpstop_{uid}"] = stop
     results = []
@@ -785,6 +799,7 @@ async def run_tcp_rotation_for_panel(update, ctx, status_msg, p, env_id, uid):
 
     for i in range(1, count + 1):
         lines = []
+        port_i = assigned_ports[i - 1]  # unique port for this proxy
 
         def on_progress(m):
             lines.append(m)
@@ -792,11 +807,13 @@ async def run_tcp_rotation_for_panel(update, ctx, status_msg, p, env_id, uid):
         await say(status_msg,
                   ui.header(f'🛰 چرخش {p["name"]} — پروکسی {i}/{count}')
                   + f"\n\n<pre>{html_escape(chr(10).join(lines[-6:]) or 'شروع...')}</pre>"
-                  + f"\n\n🎯 حالت: {'🔀 تأیید' if mode=='good' else '🎲 رندم'} · 🔌 پورت {port}",
+                  + f"\n\n🎯 حالت: {'🔀 تأیید' if mode=='good' else '🎲 رندم'} · 🔌 پورت اختصاصی: {port_i}"
+                  + ("\n⚠️ این پورت قبلاً استفاده شده بود و خودکار جابجا شد."
+                     if port_i != port and i == 1 else ""),
                   keyboard=cancel_kbd)
 
         def work():
-            return api.rotate(p["service_id"], env_id, port,
+            return api.rotate(p["service_id"], env_id, port_i,
                               targets=targets, max_tries=30, cooldown=8,
                               on_progress=on_progress,
                               cancel_check=lambda: stop["kill"])
